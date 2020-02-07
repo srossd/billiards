@@ -109,6 +109,7 @@ def plot_img(im):
 	ax[0,1].imshow(Normalize(dots), cmap='Greys')
 
 	ax[0,2].imshow(use_lines(im))
+	'''
 	hull = contour(Normalize(dots))
 
 	# draw contours and hull points
@@ -118,8 +119,9 @@ def plot_img(im):
 	    cv2.drawContours(im, hull, i, color, 1, 8)
 
 	ax[0,3].imshow(imContour)
-	
+	'''	
 	plt.show()
+
 	return
 
 def Normalize(img):
