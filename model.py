@@ -5,13 +5,59 @@ Created on Tue Oct 22 23:39:11 2019
 @author: rossd
 """
 
-
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
 from skimage.filters import frangi
 
+class LineSegment:
+    def __init__(self, x1, y1, x2, y2):
+        self.x1 = x1
+        self.y1 = y1
+        self.x2 = x2
+        self.y2 = y2
+    
+    def pt1(self):
+        return np.array([self.x1, self.y1])
+    
+    def pt2(self):
+        return np.array([self.x2, self.y2])
+
+    def mid(self):
+        return 0.5*(self.pt1() + self.pt2())
+
+    def dir(self):
+        dpt = self.pt2()-self.pt1()
+        return dpt/np.linalg.norm(dpt)
+
+    def cos2(self, l):
+        return (np.dot(self.dir(), l.dir()))**2
+
+    def inter(self, l):
+        A = np.array([[self.x2-self.x1, l.x1 - l.x2], [self.y2-self.y1, l.y1 - l.y2]])
+        b = np.array([l.x1 - self.x1, l.y1 - self.y1])
+        x = np.linalg.solve(A, b)
+        return np.array([(1-x[0])*self.x1 + x[0]*self.x2, (1-x[0])*self.y1 + x[0]*self.y2])
+
+    def extend(self):
+        slope = (self.y2 - self.y1)/(self.x2-self.x1)
+        return Line(slope, 1, -slope*self.x1 - self.y1)
+
+    def __str__(self):
+        return "(%.1f, %.1f) to (%.1f, %.1f)" % (self.x1, self.y1, self.x2, self.y2)
+
+    def __repr__(self):
+        return self.__str__()
+
+class Line:
+    def __init__(self, A, B, C):
+        self.A = A
+        self.B = B
+        self.C = C
+    
+    def dist(self, pt):
+        return np.abs((self.A*pt[0] + self.B*pt[1] + self.C)/np.sqrt(self.A*self.A + self.B*self.B + self.C*self.C))
 
 def line_detect(im):
     blur = cv2.blur(im, (5, 5))
@@ -21,26 +67,56 @@ def line_detect(im):
     else:
         gray = blur
 
-    high_thresh, thresh_im = cv2.threshold(
+    high_thresh, _ = cv2.threshold(
         gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     edges = cv2.Canny(gray, 0.5*high_thresh, high_thresh)
-    lines = cv2.HoughLinesP(edges, 1, np.pi/180,
+    cv2lines = cv2.HoughLinesP(edges, 1, np.pi/180,
                             threshold=100, minLineLength=400, maxLineGap=50)
+
+    lines = list(map(lambda x: LineSegment(*x[0]), cv2lines))
 
     return lines
 
+def filter_lines(lines, cos2_thresh = .95, dist_thresh = 0.5):
+    new_lines = []
+    for l in lines:
+        fresh = True
+        for i in range(len(new_lines)):
+            if new_lines[i].cos2(l) > cos2_thresh and new_lines[i].extend().dist(l.mid()) < dist_thresh:
+                fresh = False
+                break
+        if fresh:
+            new_lines.append(l)
+    return new_lines
 
-def rect_detect(im, lines):
+def draw_lines(im, lines):
 
     im2 = im.copy()
-    for line in lines:
-        x1, y1, x2, y2 = line[0]
-        cv2.line(im2, (x1, y1), (x2, y2), (0, 255, 0), 20)
+    for i, line in enumerate(lines):
+        cv2.line(im2, (line.x1, line.y1), (line.x2, line.y2), (0, 255, 0), 20)
+        cv2.putText(im2, str(i), (int(line.mid()[0]), int(line.mid()[1])), cv2.FONT_HERSHEY_PLAIN, 10, (0, 0, 255), 20)
     return im2
 
+def draw_rect(im, r):
+    im2 = im.copy()
+    for i in range(len(r)):
+        cv2.line(im2, (int(r[i][0]), int(r[i][1])), (int(r[(i+1) % len(r)][0]), int(r[(i+1) % len(r)][1])), (0, 255, 0), 20)
+        cv2.putText(im2, str(i), (int(r[i][0]), int(r[i][1])), cv2.FONT_HERSHEY_PLAIN, 10, (0, 0, 255), 20)
+    return im2
 
-def use_lines(im):
-    return rect_detect(im, line_detect(im))
+def find_rect(l1, l2, l3, l4):
+    xs = [(x, l1.cos2(x)) for x in (l2, l3, l4)]
+    xs.sort(key = lambda x: x[1])
+    pairs = [(l1, xs[0][0]), (xs[0][0], xs[2][0]), (xs[2][0], xs[1][0]), (xs[1][0], l1)]
+
+    rect_vertices = np.float32(list(map(lambda x: x[0].inter(x[1]), pairs[:4])))
+    return rect_vertices
+
+def extract_table(im, r):
+    pts = np.float32([[0,2000],[1000,2000],[1000, 0],[0,0]])
+
+    M = cv2.getPerspectiveTransform(r,pts)
+    return cv2.warpPerspective(im,M,(1000, 2000))
 
 
 def get_mask(im, sensitivity, center):  # 36
@@ -86,13 +162,18 @@ def plot_img(im):
     return
 
 
-im = cv2.cvtColor(cv2.imread('8.jpg'), cv2.COLOR_BGR2RGB)
-#lines = line_detect(im)
-# print(len(lines))
+im = cv2.cvtColor(cv2.imread('images/1.jpg'), cv2.COLOR_BGR2RGB)
+lines = line_detect(im)
+flines = filter_lines(lines)
 
-use_lines(im)
+r = find_rect(flines[1], flines[2], flines[3], flines[4])
 
-# ax[1].imshow(frangi(im[:,:,1],beta=1.5))
-#ax[1].imshow(rect_detect(im,line_detect(im)), cmap='gray')
-#ax[1].imshow(get_mask(im, 35))
-plot_img(im)
+fig, ax = plt.subplots(1, 3, figsize=(20, 7))
+ax[0].imshow(draw_lines(im, flines), cmap='gray')
+
+# # ax[1].imshow(frangi(im[:,:,1],beta=1.5))
+ax[1].imshow(draw_rect(im, r), cmap='gray')
+ax[2].imshow(extract_table(im, r), cmap='gray')
+plt.show()
+# #ax[1].imshow(get_mask(im, 35))
+# plot_img(im)
